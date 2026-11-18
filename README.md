@@ -21,7 +21,7 @@ A real-time strategy game about spreading color. You and two bots each start wit
 - Click or tap a glowing **+** inside your color to place a marker.
 - Click or tap one of your markers to open its three upgrade buttons.
 - Keyboard: `1` `2` `3` upgrade the open marker, `Space` pauses, `Esc` closes the menu.
-- On a phone, a strip under the board shows your time, points and next marker, with a Pause button. Turn the phone sideways for a bigger board.
+- On a phone, a match fills the screen sideways. Hold the phone sideways, even if its screen doesn't rotate: the game turns the view itself when the screen stays upright. Time, points and standings sit beside the board, with Pause and Exit buttons.
 
 ## Bots
 

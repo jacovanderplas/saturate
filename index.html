@@ -72,6 +72,28 @@ header p { margin: 0; color: var(--muted); font-size: 14px; }
 .strip .s-next.ready .mono { color: var(--ink); font-weight: 600; }
 .strip .btn { padding: 10px 14px; font-size: 13px; flex: none; }
 
+/* Play view on phones: during a match the board fills the screen sideways with the status in a side column.
+   If the phone stays upright (rotation lock, or browsers that can't lock orientation), the whole view is
+   turned 90 degrees, so you simply hold the phone sideways. Sizes are set from script to fit the screen. */
+.s-rank, .s-exit { display: none; }
+body.play { overflow: hidden; overscroll-behavior: none; }
+.play .stage { position: fixed; top: 0; left: 0; z-index: 50; max-width: none; margin: 0; background: var(--ground); display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); transform-origin: top left; }
+.play .stage.rot { padding: max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)) max(8px, env(safe-area-inset-top)); }
+.play .plate { flex: none; max-width: none; aspect-ratio: auto; border-radius: 12px; box-shadow: 0 0 0 1px var(--line); }
+.play .plate canvas { touch-action: none; }
+.play .strip { display: flex; flex-direction: column; align-items: stretch; gap: 10px; width: 112px; flex: none; align-self: stretch; padding: 10px; border-radius: 12px; white-space: normal; overflow: hidden; }
+.play .strip .s-clock { font-family: var(--font-display); font-size: 24px; font-weight: 700; line-height: 1; }
+.play .strip .s-next { flex: none; flex-direction: column; align-items: stretch; gap: 4px; }
+.play .strip .s-next .meter { flex: none; }
+.play .strip .s-rank { display: grid; gap: 3px; font-size: 12px; }
+.play .s-rank div { display: flex; justify-content: space-between; align-items: center; gap: 4px; }
+.play .s-rank b { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+.play .s-rank .you { color: var(--ink); font-weight: 600; }
+.play .strip .btn { padding: 10px 8px; }
+.play .strip #sPause { margin-top: auto; }
+.play .strip .s-exit { display: block; }
+
 .instr { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 18px; display: grid; gap: 18px; }
 .instr section { display: grid; gap: 10px; }
 .instr section + section { border-top: 1px solid var(--line); padding-top: 16px; }
@@ -181,7 +203,9 @@ kbd { font-family: var(--font-mono); font-size: 12px; border: 1px solid var(--li
         <span class="mono s-clock" id="sClock">3:00</span>
         <span class="s-bank"><b class="mono" id="sBank">0</b>pts</span>
         <span class="s-next" id="sNext"><span class="meter" aria-hidden="true"><div id="sFill"></div></span><span class="mono" id="sCost">0/40</span></span>
+        <div class="s-rank" id="sRank" aria-label="Points earned"></div>
         <button class="btn" id="sPause" disabled>Pause</button>
+        <button class="btn s-exit" id="sExit">Exit</button>
       </div>
     </div>
 
@@ -295,7 +319,7 @@ kbd { font-family: var(--font-mono); font-size: 12px; border: 1px solid var(--li
         <li>When you can afford a marker, + marks light up inside your color. Click or tap one to place it.</li>
         <li>Click or tap one of your markers to open its upgrades. Filled buttons are affordable. A ring around a button shows how close you are.</li>
         <li>A small badge on a marker means it has an upgrade you can buy now.</li>
-        <li>On a phone, a strip under the board shows your time, points and next marker, with a Pause button.</li>
+        <li>On a phone, a match fills the screen sideways: hold the phone sideways, even if its screen doesn't rotate. Time, points and standings sit beside the board. Exit returns to this page.</li>
         <li><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> upgrade the open marker. <kbd>Space</kbd> pauses. <kbd>Esc</kbd> closes the menu.</li>
       </ul>
       <p class="fine">A solid ring in the attacker's color means a marker is being captured. A captured marker loses one Strength level and all its Hold, then is safe for 6 seconds (dotted ring).</p>
@@ -684,7 +708,9 @@ kbd { font-family: var(--font-mono); font-size: 12px; border: 1px solid var(--li
     log('Placement order: ' + G.order.map(i => G.players[i].name).join(', then ') + '.');
     hint(defHint());
     dirty = true;
-    // On a phone the Start and Play again buttons sit below the board, so bring the board back into view.
+    enterPlay();
+    if (inPlay()) return;
+    // On a narrow screen the Start and Play again buttons sit below the board, so bring the board back into view.
     requestAnimationFrame(() => {
       const r = $('stage').getBoundingClientRect();
       if (r.top >= 0 && r.bottom <= innerHeight) return;
@@ -728,12 +754,61 @@ kbd { font-family: var(--font-mono); font-size: 12px; border: 1px solid var(--li
 
   function resize() {
     dpr = Math.min(2, window.devicePixelRatio || 1);
-    const r = canvas.getBoundingClientRect();
-    cw = Math.max(1, Math.round(r.width * dpr)); ch = Math.max(1, Math.round(r.height * dpr));
+    // Layout size, not the on-screen box: the play view may turn the board 90 degrees.
+    cw = Math.max(1, Math.round(canvas.offsetWidth * dpr)); ch = Math.max(1, Math.round(canvas.offsetHeight * dpr));
     if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
   }
   new ResizeObserver(resize).observe(canvas);
   const sx = x => x / W * cw, sy = y => y / H * ch;
+
+  // ---------- play view (phones) ----------
+  // During a match on a phone the board takes the whole screen, sideways. We ask for full screen and a
+  // landscape lock where the browser allows it; when the screen still ends up upright, the view is turned
+  // 90 degrees clockwise instead, so it reads correctly with the phone turned sideways.
+  let rotated = false;
+  const isPhone = () => touchUI() && Math.min(screen.width, screen.height) < 600;
+  const inPlay = () => document.body.classList.contains('play');
+  function layoutPlay() {
+    const st = $('stage'), plate = st.querySelector('.plate');
+    if (!inPlay()) {
+      rotated = false; st.classList.remove('rot');
+      st.style.width = st.style.height = st.style.transform = plate.style.width = plate.style.height = '';
+      return;
+    }
+    const iw = innerWidth, ih = innerHeight;
+    rotated = ih > iw;
+    st.classList.toggle('rot', rotated);
+    const LW = Math.max(iw, ih), LH = Math.min(iw, ih), cs = getComputedStyle(st);
+    const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight), padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+    const side = $('strip').offsetWidth || 112, gap = 8;
+    let h = LH - padY, w = h * W / H;                       // as tall as the screen allows
+    if (w > LW - padX - side - gap) { w = LW - padX - side - gap; h = w * H / W; }
+    st.style.width = LW + 'px'; st.style.height = LH + 'px';
+    st.style.transform = rotated ? `translateX(${iw}px) rotate(90deg)` : '';
+    plate.style.width = Math.floor(w) + 'px'; plate.style.height = Math.floor(h) + 'px';
+  }
+  function enterPlay() {
+    if (inPlay() || !isPhone()) return;
+    document.body.classList.add('play');
+    layoutPlay();
+    const el = document.documentElement;
+    // Both calls fail quietly on browsers that don't allow them (iPhone Safari, embedded frames).
+    Promise.resolve(el.requestFullscreen ? el.requestFullscreen({ navigationUI: 'hide' }) : null)
+      .then(() => screen.orientation && screen.orientation.lock ? screen.orientation.lock('landscape') : null)
+      .catch(() => {})
+      .finally(() => setTimeout(layoutPlay, 300));
+  }
+  function exitPlay() {
+    if (!inPlay()) return;
+    if (G.phase === 'live') G.paused = true;
+    document.body.classList.remove('play');
+    try { screen.orientation && screen.orientation.unlock && screen.orientation.unlock(); } catch (e) {}
+    if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+    layoutPlay(); dirty = true;
+    requestAnimationFrame(() => $('stage').scrollIntoView({ block: 'center' }));
+  }
+  addEventListener('resize', () => { if (inPlay()) layoutPlay(); });
+  addEventListener('orientationchange', () => setTimeout(layoutPlay, 200));
 
   function paintField(t) {
     accumulate(rAcc, RX, RY, 'dR', 'qR');
@@ -1038,9 +1113,14 @@ kbd { font-family: var(--font-mono); font-size: 12px; border: 1px solid var(--li
     $('sBank').textContent = Math.floor(you.bank);
     $('sFill').style.width = $('nextFill').style.width;
     $('sNext').classList.toggle('ready', ready);
-    $('sCost').textContent = ready ? `+ ready · ${cost}` : `${Math.min(cost, Math.floor(you.bank))}/${cost}`;
-    $('sPause').textContent = G.paused ? 'Resume' : 'Pause';
-    $('sPause').disabled = $('pause').disabled;
+    $('sCost').textContent = ready ? `Ready · ${cost}` : `${Math.min(cost, Math.floor(you.bank))}/${cost}`;
+    // After the match the strip's button starts the next one, since the panel with Play again may be out of view.
+    const over = G.phase === 'over';
+    $('sPause').textContent = over ? 'Play again' : G.paused ? 'Resume' : 'Pause';
+    $('sPause').disabled = !over && $('pause').disabled;
+    const rank = [...P].sort((a, b) => b.earned - a.earned).map(pl =>
+      `<div class="${pl.i === G.you ? 'you' : ''}"><span><b style="background:${pl.css}"></b>${pl.name}</span><span class="mono">${Math.floor(pl.earned)}</span></div>`).join('');
+    if ($('sRank').innerHTML !== rank) $('sRank').innerHTML = rank;
     const m = G.sel;
     $('selCard').hidden = !m;
     if (m) {
@@ -1073,8 +1153,10 @@ kbd { font-family: var(--font-mono); font-size: 12px; border: 1px solid var(--li
 
   // ---------- input ----------
   function worldPos(e) {
-    const r = canvas.getBoundingClientRect();
-    return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H };
+    const r = canvas.getBoundingClientRect(), w = canvas.offsetWidth, h = canvas.offsetHeight;
+    // Turned 90 degrees clockwise: the board's x runs down the screen and its y runs right to left.
+    const lx = rotated ? e.clientY - r.top : e.clientX - r.left, ly = rotated ? r.right - e.clientX : e.clientY - r.top;
+    return { x: lx / w * W, y: ly / h * H };
   }
   function pick(pt) {
     let best = null, bd = Infinity;
@@ -1161,7 +1243,8 @@ kbd { font-family: var(--font-mono); font-size: 12px; border: 1px solid var(--li
   }
   for (const id of ['upStr', 'upReach', 'upHold']) $(id).addEventListener('click', e => doUpgrade(e.currentTarget.dataset.k));
   $('pause').addEventListener('click', togglePause);
-  $('sPause').addEventListener('click', togglePause);
+  $('sPause').addEventListener('click', () => { if (G.phase === 'over') $('again').click(); else togglePause(); });
+  $('sExit').addEventListener('click', exitPlay);
   document.addEventListener('keydown', e => {
     if (e.target.closest && e.target.closest('input')) return;
     if (e.key === '1') doUpgrade('str');
