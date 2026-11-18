@@ -1,0 +1,1226 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Saturate: a real-time color-spreading strategy game against two bots.">
+<title>Saturate</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=DM+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: board-first command bench. The board is the hero; a narrow command column sits to its right and stacks below it under 880px. Single dark look on purpose: additive light only reads on black. */
+:root {
+  --ground: #0b0b11;
+  --plate: #06060a;
+  --surface: #14141d;
+  --raised: #1c1b27;
+  --line: #2a2937;
+  --ink: #ecebf4;
+  --muted: #8f8ca6;
+  --warn: #ffb547;
+  --red: #ff4a4a;
+  --green: #3cff74;
+  --blue: #5a86ff;
+  --you: #ff4a4a;
+  --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "DM Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 20px 48px;
+}
+.wrap { max-width: 1240px; margin: 0 auto; display: grid; gap: 20px; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+header h1 { margin: 0; font-family: var(--font-display); font-weight: 800; font-size: 34px; letter-spacing: -0.02em; line-height: 1; }
+header .rgb { display: inline-flex; gap: 4px; transform: translateY(-3px); }
+header .rgb i { width: 9px; height: 9px; border-radius: 50%; display: block; }
+header p { margin: 0; color: var(--muted); font-size: 14px; }
+
+.bench { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 20px; align-items: start; }
+@media (max-width: 880px) { .bench { grid-template-columns: minmax(0, 1fr); } }
+
+/* The board column never gets taller than the screen, so a phone held sideways sees the whole board plus the strip under it. */
+.stage { display: grid; gap: 8px; width: 100%; min-width: 0; margin-inline: auto; max-width: max(280px, calc((100vh - 72px) * 1.6)); max-width: max(280px, calc((100svh - 72px) * 1.6)); }
+.plate { position: relative; aspect-ratio: 16 / 10; max-width: 100%; border-radius: 16px; overflow: hidden; background: var(--plate); box-shadow: 0 0 0 1px var(--line), 0 30px 80px -40px rgba(0, 0, 0, 0.9); }
+.plate canvas { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: manipulation; }
+.hud { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); max-width: calc(100% - 24px); display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: rgba(11, 11, 17, 0.82); border: 1px solid var(--line); font-size: 13px; pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hud:empty { display: none; }
+.hud b { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+/* Status strip under the board: only when the side panel has dropped below the board, so the essentials stay in view. */
+.strip { display: none; }
+@media (max-width: 880px) {
+  .strip { display: flex; align-items: center; gap: 12px; padding: 4px 4px 4px 14px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); font-size: 13px; color: var(--muted); white-space: nowrap; }
+}
+.strip .s-clock { color: var(--ink); font-weight: 500; }
+.strip .s-clock.low { color: var(--warn); }
+.strip .s-bank b { color: var(--ink); font-weight: 600; font-size: 15px; margin-right: 3px; }
+.strip .s-next { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.strip .s-next .meter { flex: 1; min-width: 24px; }
+.strip .s-next.ready .meter div { background: var(--you); box-shadow: 0 0 10px var(--you); }
+.strip .s-next.ready .mono { color: var(--ink); font-weight: 600; }
+.strip .btn { padding: 10px 14px; font-size: 13px; flex: none; }
+
+.instr { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 18px; display: grid; gap: 18px; }
+.instr section { display: grid; gap: 10px; }
+.instr section + section { border-top: 1px solid var(--line); padding-top: 16px; }
+.eyebrow { margin: 0; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.fine { margin: 0; font-size: 12px; color: var(--muted); }
+
+.clockrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.clock { font-family: var(--font-display); font-weight: 700; font-size: 40px; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.clock.low { color: var(--warn); }
+.phase { font-size: 13px; color: var(--muted); }
+
+table.board { width: 100%; border-collapse: collapse; font-size: 13px; }
+.board th { text-align: right; font-weight: 500; color: var(--muted); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; padding: 0 0 6px; }
+.board th:first-child { text-align: left; }
+.board td { text-align: right; padding: 5px 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; border-top: 1px solid var(--line); }
+.board td:first-child { text-align: left; font-family: var(--font-body); font-weight: 500; }
+.board td:first-child span { display: inline-flex; align-items: center; gap: 7px; }
+.board td b { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.board tr.you td { color: var(--ink); }
+.board tr.you td:first-child { font-weight: 700; }
+.board tr.out td { color: var(--muted); text-decoration: line-through; }
+.terrbar { height: 8px; border-radius: 4px; background: var(--plate); overflow: hidden; display: flex; }
+.terrbar div { height: 100%; transition: width 0.25s linear; }
+@media (prefers-reduced-motion: reduce) { .terrbar div { transition: none; } }
+
+.bank { display: flex; justify-content: space-between; align-items: baseline; }
+.bank .big { font-family: var(--font-display); font-weight: 700; font-size: 26px; font-variant-numeric: tabular-nums; }
+.bank .rate { font-size: 13px; color: var(--muted); }
+
+.btn { font: 500 14px/1 var(--font-body); color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 10px 16px; cursor: pointer; }
+.btn:hover { border-color: var(--muted); }
+.btn:focus-visible, .plate canvas:focus-visible, input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.btn.primary { background: var(--ink); color: var(--ground); border-color: var(--ink); font-weight: 600; }
+.btn.primary:hover { background: #ffffff; }
+.btn.on { border-color: var(--you); box-shadow: inset 0 0 0 1px var(--you); }
+.btn:disabled { opacity: 0.35; cursor: default; }
+.btn.small { padding: 7px 11px; font-size: 13px; }
+.btnrow { display: flex; flex-wrap: wrap; gap: 8px; }
+.next { display: grid; gap: 6px; }
+.nextrow { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 13px; color: var(--muted); }
+.nextrow .mono { color: var(--ink); white-space: nowrap; }
+.meter { height: 6px; border-radius: 3px; background: var(--plate); overflow: hidden; }
+.meter div { height: 100%; width: 0; background: var(--muted); border-radius: 3px; }
+.next.ready .nextrow span:first-child { color: var(--ink); font-weight: 600; }
+.next.ready .meter div { background: var(--you); box-shadow: 0 0 10px var(--you); }
+
+.card { background: var(--raised); border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
+.card h3 { margin: 0; font-family: var(--font-display); font-weight: 600; font-size: 16px; display: flex; align-items: center; gap: 8px; }
+.card h3 b { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+.upg { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 10px; }
+.upg .nm { font-size: 14px; font-weight: 600; }
+.upg .ds { grid-column: 1; font-size: 12px; color: var(--muted); }
+.upg .btn { grid-row: 1 / span 2; grid-column: 2; min-width: 96px; }
+.lv { display: inline-flex; gap: 3px; margin-left: 6px; vertical-align: 1px; }
+.lv i { width: 7px; height: 7px; border-radius: 2px; background: var(--line); display: block; }
+.lv i.f { background: var(--ink); }
+.hint { margin: 0; font-size: 13px; color: var(--muted); min-height: 1.5em; }
+.hint.bad { color: var(--warn); }
+
+.log { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+.log li { display: flex; gap: 8px; }
+.log li .mono { color: var(--muted); opacity: 0.7; flex: none; }
+.log li.mine { color: var(--ink); }
+
+.opt { display: grid; gap: 6px; }
+.opt > span { font-size: 13px; color: var(--muted); }
+.optnote { font-size: 12px; line-height: 1.4; color: var(--muted); }
+.seg { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.seg button { font: 500 13px/1 var(--font-body); color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 8px 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--ground); border-color: var(--ink); }
+.seg button b { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.seg button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.check { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; cursor: pointer; }
+.check input { margin-top: 3px; accent-color: var(--ink); }
+.check small { display: block; color: var(--muted); font-size: 12px; }
+
+.result h2 { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 28px; line-height: 1.15; text-wrap: balance; }
+.result p { margin: 0; color: var(--muted); font-size: 14px; }
+
+.notes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+@media (max-width: 880px) { .notes { grid-template-columns: minmax(0, 1fr); } }
+.notes > div { min-width: 0; }
+.notes h3 { margin: 0 0 8px; font-family: var(--font-display); font-weight: 600; font-size: 17px; }
+.notes ol, .notes ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; font-size: 14px; max-width: 46ch; }
+.notes .fine { margin-top: 10px; max-width: 46ch; }
+.mix { display: grid; gap: 7px; font-size: 13px; }
+.mix div { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.mix b { width: 18px; height: 18px; border-radius: 50%; display: inline-block; flex: none; }
+.mix .eq { width: 10px; text-align: center; }
+kbd { font-family: var(--font-mono); font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Saturate</h1>
+    <span class="rgb" aria-hidden="true"><i style="background:#ff0000"></i><i style="background:#00ff00"></i><i style="background:#0000ff"></i></span>
+    <p>Claim the resources, outgrow two bots, flood the board with your color.</p>
+  </header>
+
+  <div class="bench">
+    <div class="stage" id="stage">
+      <div class="plate">
+        <canvas id="board" tabindex="0" aria-label="The board. Click or tap to place markers or select one of yours."></canvas>
+        <div class="hud" id="hud"></div>
+      </div>
+      <div class="strip" id="strip" hidden>
+        <span class="mono s-clock" id="sClock">3:00</span>
+        <span class="s-bank"><b class="mono" id="sBank">0</b>pts</span>
+        <span class="s-next" id="sNext"><span class="meter" aria-hidden="true"><div id="sFill"></div></span><span class="mono" id="sCost">0/40</span></span>
+        <button class="btn" id="sPause" disabled>Pause</button>
+      </div>
+    </div>
+
+    <aside class="instr">
+      <!-- Before a match -->
+      <div id="setupBox" style="display:grid; gap:18px">
+        <section>
+          <p class="eyebrow">New match</p>
+          <div class="opt"><span>Your color</span>
+            <div class="seg" id="optColor">
+              <button data-v="0" aria-pressed="true"><b style="background:var(--red)"></b>Red</button>
+              <button data-v="1" aria-pressed="false"><b style="background:var(--green)"></b>Green</button>
+              <button data-v="2" aria-pressed="false"><b style="background:var(--blue)"></b>Blue</button>
+            </div>
+          </div>
+          <div class="opt"><span>Bots</span>
+            <div class="seg" id="optBot">
+              <button data-v="easy" aria-pressed="false">Easy</button>
+              <button data-v="normal" aria-pressed="true">Normal</button>
+              <button data-v="hard" aria-pressed="false">Hard</button>
+            </div>
+            <small class="optnote" id="botNote"></small>
+          </div>
+          <div class="opt"><span>Match length</span>
+            <div class="seg" id="optLen">
+              <button data-v="120" aria-pressed="false">2 min</button>
+              <button data-v="180" aria-pressed="true">3 min</button>
+              <button data-v="300" aria-pressed="false">5 min</button>
+            </div>
+          </div>
+          <label class="check"><input type="checkbox" id="optInside" checked><span>New markers only inside your color<small>Off: place new markers anywhere on the board.</small></span></label>
+        </section>
+        <section>
+          <div class="btnrow">
+            <button class="btn primary" id="start">Start match</button>
+            <button class="btn" id="reroll">New board</button>
+          </div>
+          <p class="fine">Each player places one marker, in random order. Then the match runs in real time.</p>
+        </section>
+      </div>
+
+      <!-- During and after a match -->
+      <div id="matchBox" style="display:none; gap:18px">
+        <section>
+          <div class="clockrow">
+            <div><p class="eyebrow">Time left</p><div class="clock" id="clock">3:00</div></div>
+            <button class="btn small" id="pause" disabled>Pause</button>
+          </div>
+          <p class="phase" id="phase">Placing first markers</p>
+        </section>
+        <section>
+          <table class="board" aria-label="Players">
+            <thead><tr><th>Player</th><th>Earned</th><th>Board</th><th>Markers</th></tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+          <div class="terrbar" id="terrbar" aria-hidden="true"></div>
+        </section>
+        <section id="shop">
+          <div class="bank"><div><p class="eyebrow">Your points</p><span class="big" id="bank">0</span></div><span class="rate mono" id="rate">+0.0 / s</span></div>
+          <div class="next" id="next">
+            <div class="nextrow"><span id="nextLabel">Next marker</span><span class="mono" id="newCost">0 / 40</span></div>
+            <div class="meter" aria-hidden="true"><div id="nextFill"></div></div>
+          </div>
+          <div class="card" id="selCard" hidden>
+            <h3><b id="selDot"></b><span id="selTitle">Your marker</span></h3>
+            <div class="upg"><span class="nm">Strength<span class="lv" id="lvStr"></span></span><span class="ds">Pushes your color harder</span><button class="btn small" id="upStr" data-k="str"></button></div>
+            <div class="upg"><span class="nm">Reach<span class="lv" id="lvReach"></span></span><span class="ds">Spreads your color further</span><button class="btn small" id="upReach" data-k="reach"></button></div>
+            <div class="upg"><span class="nm">Hold<span class="lv" id="lvHold"></span></span><span class="ds">Harder to capture</span><button class="btn small" id="upHold" data-k="hold"></button></div>
+          </div>
+          <p class="hint" id="hint"></p>
+        </section>
+        <section class="result" id="result" hidden>
+          <h2 id="resultTitle"></h2>
+          <p id="resultText"></p>
+          <div class="btnrow">
+            <button class="btn primary" id="again">Play again</button>
+            <button class="btn" id="settings">Change settings</button>
+          </div>
+        </section>
+        <section>
+          <p class="eyebrow">Events</p>
+          <ul class="log" id="log"></ul>
+        </section>
+      </div>
+    </aside>
+  </div>
+
+  <div class="notes">
+    <div>
+      <h3>How a match works</h3>
+      <ol>
+        <li>Each player places one marker, in random order. Later players see where the earlier ones went.</li>
+        <li>The clock starts. Markers spread their color outward, and overlapping colors fight for the ground.</li>
+        <li>Every resource you color pays you points each second. A contested resource splits its payout.</li>
+        <li>Spend points on new markers or upgrades. When enemy color outweighs a marker's own Strength and Hold, it drains and then switches sides. Captures start 45 seconds in.</li>
+        <li>Most points earned when time runs out wins. Cover the whole board in your color and you win at once.</li>
+      </ol>
+    </div>
+    <div>
+      <h3>Additive mixing</h3>
+      <div class="mix">
+        <div><b style="background:#ff0000"></b><span class="eq">+</span><b style="background:#00ff00"></b><span class="eq">=</span><b style="background:#ffff00"></b>yellow front</div>
+        <div><b style="background:#00ff00"></b><span class="eq">+</span><b style="background:#0000ff"></b><span class="eq">=</span><b style="background:#00ffff"></b>cyan front</div>
+        <div><b style="background:#0000ff"></b><span class="eq">+</span><b style="background:#ff0000"></b><span class="eq">=</span><b style="background:#ff00ff"></b>magenta front</div>
+      </div>
+      <p class="fine">Bright mixed colors mark the contested ground. The stronger color takes most of the mix. Spending on new markers doesn't lower your score: only points earned count.</p>
+    </div>
+    <div>
+      <h3>Controls</h3>
+      <ul>
+        <li>When you can afford a marker, + marks light up inside your color. Click or tap one to place it.</li>
+        <li>Click or tap one of your markers to open its upgrades. Filled buttons are affordable. A ring around a button shows how close you are.</li>
+        <li>A small badge on a marker means it has an upgrade you can buy now.</li>
+        <li>On a phone, a strip under the board shows your time, points and next marker, with a Pause button.</li>
+        <li><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> upgrade the open marker. <kbd>Space</kbd> pauses. <kbd>Esc</kbd> closes the menu.</li>
+      </ul>
+      <p class="fine">A solid ring in the attacker's color means a marker is being captured. A captured marker loses one Strength level and all its Hold, then is safe for 6 seconds (dotted ring).</p>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ---------- rules ----------
+  const W = 1.6, H = 1.0;
+  const RX = 192, RY = 120, RG = RX * RY;      // render grid
+  const SX = 64, SY = 40, SG = SX * SY;        // scoring grid
+  const GAMMA = 2.2, EDGE = 0.035, GROW = 0.11;
+  const LV = {
+    str:   { val: [1, 1.6, 2.3, 3.0],     cost: [0, 30, 60, 100] },
+    reach: { val: [0.20, 0.27, 0.34, 0.42], cost: [0, 25, 50, 85] },
+    hold:  { val: [1, 1.6, 2.4, 3.4],     cost: [0, 20, 40, 70] },
+  };
+  // A marker resists capture by its own Strength and Hold only; friendly markers nearby don't shield it.
+  // A captured marker is safe for SAFE seconds, which stops two sides trading it back and forth.
+  // GRACE: no captures in the opening seconds, so a slow start does not cost you your only marker.
+  const HOLD = 0.45, DRAIN = 0.55, REGEN = 0.25, SAFE = 6, GRACE = 45, MIN_GAP = 0.06, START_GAP = 0.24, INCOME = 1;
+  const markerCost = n => 40 + 20 * Math.max(0, n - 1);
+  const CH_NAME = ['Red', 'Green', 'Blue'];
+  const CH_CSS = ['#ff4a4a', '#3cff74', '#5a86ff'];
+  const CH_RGB = [[255, 74, 74], [60, 255, 116], [90, 134, 255]];
+  // think: seconds between decisions. cands: spots a bot tries before buying a marker. noise: how sloppy its choices are.
+  // open: spots it tries for its starting marker. hitYou: how keen it is to capture your markers (1 = as keen as on the other bot's).
+  // earn: share of normal income the bot gets.
+  const BOT = {
+    easy:   { think: 4.5, cands: 5,  noise: 1,    kinds: ['str', 'reach'], open: 6,   hitYou: 0,   earn: 0.55 },
+    normal: { think: 2.8, cands: 10, noise: 0.5,  kinds: ['str', 'reach', 'hold'], open: 25,  hitYou: 0.35, earn: 0.8 },
+    hard:   { think: 1.4, cands: 22, noise: 0.2,  kinds: ['str', 'reach', 'hold'], open: 120, hitYou: 0.8, earn: 1 },
+  };
+
+  let rand = Math.random;
+
+  // ---------- settings ----------
+  const settings = { color: 0, bot: 'normal', len: 180, inside: true };
+  try { Object.assign(settings, JSON.parse(localStorage.getItem('saturate.settings') || '{}')); } catch (e) {}
+  const saveSettings = () => { try { localStorage.setItem('saturate.settings', JSON.stringify(settings)); } catch (e) {} };
+
+  // ---------- state ----------
+  let G, mid = 0;
+
+  function makeBoard() {
+    const res = [];
+    for (let tries = 0; res.length < 26 && tries < 6000; tries++) {
+      const x = 0.06 + rand() * (W - 0.12), y = 0.06 + rand() * (H - 0.12);
+      if (res.some(r => Math.hypot(r.x - x, r.y - y) < 0.12)) continue;
+      const u = rand();
+      res.push({ x, y, v: u < 0.5 ? 1 : u < 0.85 ? 2 : 3, share: [0, 0, 0], acc: 0, pulse: -9 });
+    }
+    return res;
+  }
+
+  function newGame(opt = {}) {
+    const you = opt.allBots ? -1 : 0;
+    const chans = [settings.color, ...[0, 1, 2].filter(c => c !== settings.color)];
+    const players = chans.map((ch, i) => ({
+      i, ch, css: CH_CSS[ch], name: i === you ? 'You' : CH_NAME[ch], bot: i !== you,
+      bank: 0, earned: 0, rate: 0, terr: 0, alive: true, think: 1 + rand(),
+    }));
+    const order = [0, 1, 2];
+    for (let i = 2; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+    G = {
+      phase: opt.phase || 'menu', t: 0, duration: settings.len, rules: { inside: settings.inside, bot: settings.bot },
+      you, players, order, turn: 0, botWait: 0.9, markers: [], res: opt.res || G?.res || makeBoard(),
+      tick: 0, scoreT: 0, paused: false, sel: null, log: [], fx: [], floats: [],
+      winner: -1, endReason: "",
+    };
+    for (const r of G.res) { r.share = [0, 0, 0]; r.acc = 0; r.pulse = -9; }
+    return G;
+  }
+
+  function newMarker(owner, x, y) {
+    const m = { id: ++mid, owner, x, y, str: 0, reach: 0, hold: 0, r: 0, control: 1, attacker: -1, safe: 0,
+      dR: new Float32Array(RG), qR: new Float32Array(RG), dS: new Float32Array(SG), qS: new Float32Array(SG) };
+    for (let j = 0, p = 0; j < RY; j++) for (let i = 0; i < RX; i++, p++) m.dR[p] = Math.hypot((i + 0.5) / RX * W - x, (j + 0.5) / RY * H - y);
+    for (let j = 0, p = 0; j < SY; j++) for (let i = 0; i < SX; i++, p++) m.dS[p] = Math.hypot((i + 0.5) / SX * W - x, (j + 0.5) / SY * H - y);
+    setKernel(m);
+    return m;
+  }
+  function setKernel(m) {
+    const L = 0.5 * LV.reach.val[m.reach], iL2 = 1 / (L * L);
+    for (let p = 0; p < RG; p++) { const t = 1 / (1 + m.dR[p] * m.dR[p] * iL2); m.qR[p] = t * t; }
+    for (let p = 0; p < SG; p++) { const t = 1 / (1 + m.dS[p] * m.dS[p] * iL2); m.qS[p] = t * t; }
+  }
+
+  // Influence of one marker at a point. full = as if fully grown (for planning).
+  function weight(x, y, mx, my, str, reach, r) {
+    const d = Math.hypot(mx - x, my - y);
+    if (d >= r) return 0;
+    let e = (r - d) / EDGE; if (e > 1) e = 1;
+    const L = 0.5 * LV.reach.val[reach], t = 1 / (1 + d * d / (L * L));
+    return LV.str.val[str] * t * t * e;
+  }
+  const mW = (m, x, y, full) => weight(x, y, m.x, m.y, m.str, m.reach, full ? LV.reach.val[m.reach] : m.r);
+  function inflAt(x, y, full, skip) {
+    const I = [0, 0, 0];
+    for (const m of G.markers) if (m !== skip) I[m.owner] += mW(m, x, y, full);
+    return I;
+  }
+  function shares(I) {
+    const v = I.map(a => a > 0 ? Math.pow(a, GAMMA) : 0), s = v[0] + v[1] + v[2];
+    return s < 1e-12 ? [0, 0, 0] : v.map(a => a / s);
+  }
+  // Index of the player who owns a spot outright, -1 for empty, -2 for mixed.
+  function ownerOf(I) {
+    const v = I.map(a => a > 0 ? Math.pow(a, GAMMA) : 0);
+    const k = v[0] >= v[1] ? (v[0] >= v[2] ? 0 : 2) : (v[1] >= v[2] ? 1 : 2);
+    if (v[k] < 1e-12) return -1;
+    for (let q = 0; q < 3; q++) if (q !== k && v[q] > 0.5 * v[k]) return -2;
+    return k;
+  }
+  const defense = m => HOLD * LV.str.val[m.str] * LV.hold.val[m.hold];
+  const countOf = pi => G.markers.reduce((n, m) => n + (m.owner === pi), 0);
+
+  function placeProblem(pi, x, y) {
+    if (x < 0.02 || y < 0.02 || x > W - 0.02 || y > H - 0.02) return 'Too close to the edge.';
+    const gap = G.phase === 'setup' ? START_GAP : MIN_GAP;
+    if (G.markers.some(m => Math.hypot(m.x - x, m.y - y) < gap)) return G.phase === 'setup' ? 'Too close to another starting marker.' : 'Too close to another marker.';
+    if (G.phase === 'live') {
+      if (G.rules.inside && countOf(pi) > 0 && ownerOf(inflAt(x, y, false)) !== pi) return 'New markers go inside your own color.';
+      if (G.players[pi].bank < markerCost(countOf(pi))) return 'Not enough points yet.';
+    }
+    return '';
+  }
+
+  function place(pi, x, y) {
+    const m = newMarker(pi, x, y);
+    if (G.phase === 'live') G.players[pi].bank -= markerCost(countOf(pi));
+    G.markers.push(m);
+    G.fx.push({ kind: 'ring', x, y, t0: now(), css: G.players[pi].css });
+    return m;
+  }
+
+  function upgrade(m, kind) {
+    const p = G.players[m.owner], lv = m[kind];
+    if (lv >= 3) return false;
+    const c = LV[kind].cost[lv + 1];
+    if (p.bank < c) return false;
+    p.bank -= c; m[kind]++;
+    if (kind === 'reach') setKernel(m);
+    G.fx.push({ kind: 'ring', x: m.x, y: m.y, t0: now(), css: p.css });
+    return true;
+  }
+
+  function log(text, mine) {
+    G.log.unshift({ t: G.t, text, mine });
+    if (G.log.length > 6) G.log.length = 6;
+    dirty = true;
+  }
+
+  // ---------- simulation ----------
+  const sAcc = [new Float32Array(SG), new Float32Array(SG), new Float32Array(SG)];
+  function accumulate(acc, gx, gy, dKey, qKey) {
+    acc[0].fill(0); acc[1].fill(0); acc[2].fill(0);
+    for (const m of G.markers) {
+      const r = m.r; if (r <= 0) continue;
+      const s = LV.str.val[m.str], out = acc[m.owner], d = m[dKey], q = m[qKey];
+      const i0 = Math.max(0, Math.floor((m.x - r) / W * gx)), i1 = Math.min(gx - 1, Math.ceil((m.x + r) / W * gx));
+      const j0 = Math.max(0, Math.floor((m.y - r) / H * gy)), j1 = Math.min(gy - 1, Math.ceil((m.y + r) / H * gy));
+      for (let j = j0; j <= j1; j++) {
+        for (let i = i0, p = j * gx + i0; i <= i1; i++, p++) {
+          const dd = d[p]; if (dd >= r) continue;
+          let e = (r - dd) / EDGE; if (e > 1) e = 1;
+          out[p] += s * q[p] * e;
+        }
+      }
+    }
+  }
+
+  function scoreTerritory() {
+    accumulate(sAcc, SX, SY, 'dS', 'qS');
+    const n = [0, 0, 0], I = [0, 0, 0];
+    for (let p = 0; p < SG; p++) {
+      I[0] = sAcc[0][p]; I[1] = sAcc[1][p]; I[2] = sAcc[2][p];
+      const k = ownerOf(I); if (k >= 0) n[k]++;
+    }
+    G.players.forEach((pl, k) => { pl.terr = n[k] / SG; });
+    const full = G.players.find(pl => pl.alive && n[pl.i] === SG);
+    if (full) end('flood', full.i);
+  }
+
+  function step(dt) {
+    G.t += dt;
+    const P = G.players;
+    for (const m of G.markers) { const R = LV.reach.val[m.reach]; m.r = Math.min(R, m.r + GROW * dt); }
+
+    // income
+    const gain = [0, 0, 0], rate = P.map(pl => INCOME * (pl.bot ? BOT[G.rules.bot].earn : 1));
+    for (const r of G.res) {
+      const sh = shares(inflAt(r.x, r.y, false));
+      r.share = sh;
+      for (let k = 0; k < 3; k++) if (sh[k] > 0) {
+        const g = r.v * rate[k] * sh[k] * dt;
+        P[k].bank += g; P[k].earned += g; gain[k] += g;
+        if (k === G.you) r.acc += g;
+      }
+    }
+    for (let k = 0; k < 3; k++) P[k].rate += (gain[k] / dt - P[k].rate) * Math.min(1, dt * 2);
+    G.tick += dt;
+    if (G.tick >= 1) {
+      G.tick -= 1;
+      for (const r of G.res) {
+        if (r.acc >= 0.5) G.floats.push({ x: r.x, y: r.y, text: '+' + Math.round(r.acc), css: P[G.you].css, t0: now() });
+        if (r.share[0] + r.share[1] + r.share[2] > 0) r.pulse = now();
+        r.acc = 0;
+      }
+    }
+
+    // captures
+    if (G.t >= GRACE && G.t - dt < GRACE) log("Ceasefire over. Markers can now be captured.", true);
+    const flips = [];
+    for (const m of G.markers) {
+      const I = inflAt(m.x, m.y, false, m), def = defense(m);
+      let k = -1, best = 0;
+      for (let q = 0; q < 3; q++) if (q !== m.owner && I[q] > best) { best = I[q]; k = q; }
+      if (k >= 0 && best > def && G.t >= m.safe && G.t >= GRACE) {
+        m.attacker = k;
+        m.control -= DRAIN * dt * (best - def) / best;
+        if (m.control <= 0) flips.push([m, k]);
+      } else {
+        m.control = Math.min(1, m.control + REGEN * dt);
+        if (m.control >= 1) m.attacker = -1;
+      }
+    }
+    for (const [m, k] of flips) {
+      const from = m.owner;
+      // Switching sides costs a Strength level and all Hold.
+      m.owner = k; m.control = 1; m.safe = G.t + SAFE; m.attacker = -1;
+      m.str = Math.max(0, m.str - 1); m.hold = 0;
+      G.fx.push({ kind: 'flip', x: m.x, y: m.y, t0: now(), css: P[k].css });
+      if (G.sel === m) G.sel = null;
+      log(`${P[k].name} captured a ${from === G.you ? 'marker of yours' : P[from].name + ' marker'}.`, k === G.you || from === G.you);
+    }
+
+    // eliminations
+    for (const pl of P) {
+      if (!pl.alive || countOf(pl.i) > 0) continue;
+      if (G.rules.inside || pl.bank < markerCost(0)) {
+        pl.alive = false;
+        log(pl.i === G.you ? 'You lost your last marker.' : `${pl.name} is out.`, pl.i === G.you);
+        if (pl.i === G.you) { end('wiped'); return; }
+      }
+    }
+
+    // bots
+    for (const pl of P) {
+      if (!pl.bot || !pl.alive) continue;
+      pl.think -= dt;
+      if (pl.think <= 0) { const cfg = BOT[G.rules.bot]; pl.think = cfg.think * (0.75 + 0.5 * rand()); botAct(pl.i); }
+    }
+
+    G.scoreT -= dt;
+    if (G.scoreT <= 0) { G.scoreT = 0.25; scoreTerritory(); if (G.phase !== 'live') return; }
+    if (G.t >= G.duration) end('time');
+  }
+
+  function end(reason, who) {
+    if (G.phase === 'over') return;
+    G.phase = 'over'; G.endReason = reason; G.sel = null;
+    if (reason === 'flood') G.winner = who;
+    else {
+      let b = -1, w = -1;
+      G.players.forEach(pl => { if (pl.earned > b) { b = pl.earned; w = pl.i; } });
+      G.winner = reason === 'wiped' ? G.players.filter(pl => pl.alive).sort((a, b) => b.earned - a.earned)[0]?.i ?? w : w;
+    }
+    dirty = true; showResult();
+  }
+
+  // ---------- bots ----------
+  // How much a change to player pi's influence is worth, in points per second.
+  // delta(x, y) gives pi's added influence at a point; hold is extra Hold on one marker.
+  function evaluate(pi, delta, changed, newDefBoost) {
+    let g = 0;
+    const hitYou = G.players[pi].bot ? BOT[G.rules.bot].hitYou : 1;
+    // income
+    for (const r of G.res) {
+      const I = inflAt(r.x, r.y, true);
+      const d = delta(r.x, r.y);
+      if (d <= 0) continue;
+      const before = shares(I)[pi];
+      I[pi] += d;
+      g += r.v * (shares(I)[pi] - before);
+    }
+    // attack and defense around markers
+    for (const m of G.markers) {
+      const I = inflAt(m.x, m.y, true, m), def = defense(m), val = markerValue(m);
+      if (m.owner === pi) {
+        let threat = 0;
+        for (let q = 0; q < 3; q++) if (q !== pi) threat = Math.max(threat, I[q]);
+        const nd = def + (m === changed ? newDefBoost : 0);
+        if (threat > def && threat <= nd) g += 1.2 * val;
+        else if (threat > def) g += 0.4 * val * Math.min(1, (nd - def) / (threat - def));
+      } else {
+        const d = delta(m.x, m.y);
+        if (d <= 0) continue;
+        const a0 = I[pi] / def, a1 = (I[pi] + d) / def, k = m.owner === G.you ? hitYou : 1;
+        if (a0 <= 1 && a1 > 1) g += 0.8 * k * val;
+        else g += 0.25 * k * val * (Math.min(1, a1) - Math.min(1, a0));
+      }
+    }
+    return g;
+  }
+  function markerValue(m) {
+    let v = 1.5;
+    for (const r of G.res) {
+      const w = mW(m, r.x, r.y, true);
+      if (w <= 0) continue;
+      const I = inflAt(r.x, r.y, true);
+      v += r.v * w / (I[0] + I[1] + I[2]);
+    }
+    return v;
+  }
+
+  function sampleSpot(pi, mine) {
+    if (mine.length && (G.rules.inside || rand() < 0.75)) {
+      const m = mine[Math.floor(rand() * mine.length)], a = rand() * Math.PI * 2, d = 0.05 + rand() * 0.9 * m.r;
+      return [m.x + Math.cos(a) * d, m.y + Math.sin(a) * d];
+    }
+    return [0.03 + rand() * (W - 0.06), 0.03 + rand() * (H - 0.06)];
+  }
+
+  function botAct(pi, cfg = BOT[G.rules.bot]) {
+    const p = G.players[pi];
+    const mine = G.markers.filter(m => m.owner === pi), opts = [];
+    const cost = markerCost(mine.length);
+    if (p.bank >= cost * 0.6) {
+      for (let c = 0; c < cfg.cands; c++) {
+        const [x, y] = sampleSpot(pi, mine);
+        if (placeProblem(pi, x, y) && placeProblem(pi, x, y) !== 'Not enough points yet.') continue;
+        const g = evaluate(pi, (px, py) => weight(px, py, x, y, 0, 0, LV.reach.val[0]), null, 0);
+        opts.push({ g, cost, run: () => place(pi, x, y) });
+      }
+    }
+    for (const m of mine) {
+      for (const kind of cfg.kinds) {
+        const lv = m[kind]; if (lv >= 3) continue;
+        const c = LV[kind].cost[lv + 1];
+        let g;
+        if (kind === 'hold') {
+          const boost = HOLD * LV.str.val[m.str] * (LV.hold.val[lv + 1] - LV.hold.val[lv]);
+          g = evaluate(pi, () => 0, m, boost);
+        } else {
+          const s2 = kind === 'str' ? lv + 1 : m.str, r2 = kind === 'reach' ? lv + 1 : m.reach;
+          const boost = kind === 'str' ? HOLD * (LV.str.val[lv + 1] - LV.str.val[lv]) * LV.hold.val[m.hold] : 0;
+          g = evaluate(pi, (px, py) => {
+            if (px === m.x && py === m.y) return 0;
+            return weight(px, py, m.x, m.y, s2, r2, LV.reach.val[r2]) - mW(m, px, py, true);
+          }, m, boost);
+        }
+        opts.push({ g, cost: c, run: () => upgrade(m, kind) });
+      }
+    }
+    let best = null, bs = 0;
+    for (const o of opts) {
+      if (o.g <= 0.01) continue;
+      const s = o.g / o.cost * (1 + cfg.noise * (rand() * 2 - 1));
+      if (s > bs) { bs = s; best = o; }
+    }
+    if (best && p.bank >= best.cost) best.run();
+  }
+
+  function botOpening(pi, cfg = BOT[G.rules.bot]) {
+    let best = null, bs = -1;
+    for (let c = 0; c < cfg.open; c++) {
+      const x = 0.08 + rand() * (W - 0.16), y = 0.08 + rand() * (H - 0.16);
+      if (placeProblem(pi, x, y)) continue;
+      let g = evaluate(pi, (px, py) => weight(px, py, x, y, 0, 0, LV.reach.val[0]), null, 0);
+      g *= 1 + cfg.noise * (rand() * 2 - 1);
+      if (g > bs) { bs = g; best = [x, y]; }
+    }
+    if (!best) best = [0.1 + rand() * (W - 0.2), 0.1 + rand() * (H - 0.2)];
+    place(pi, best[0], best[1]);
+  }
+
+  // ---------- flow ----------
+  function startMatch() {
+    newGame({ phase: 'setup' });
+    $('setupBox').style.display = 'none';
+    $('matchBox').style.display = 'grid';
+    $('result').hidden = true; $('shop').hidden = false;
+    log('Placement order: ' + G.order.map(i => G.players[i].name).join(', then ') + '.');
+    hint(defHint());
+    dirty = true;
+    // On a phone the Start and Play again buttons sit below the board, so bring the board back into view.
+    requestAnimationFrame(() => {
+      const r = $('stage').getBoundingClientRect();
+      if (r.top >= 0 && r.bottom <= innerHeight) return;
+      const smooth = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+      window.scrollBy({ top: r.top - Math.max(8, (innerHeight - r.height) / 2), behavior: smooth ? 'smooth' : 'auto' });
+    });
+  }
+  function advanceSetup() {
+    G.turn++;
+    G.botWait = 0.7 + rand() * 0.5;
+    if (G.turn >= 3) {
+      G.phase = 'live';
+      log('The clock is running. Your color starts to spread.', true);
+      $('pause').disabled = false;
+    }
+    dirty = true;
+  }
+  function setupTick(dt) {
+    const pi = G.order[G.turn];
+    if (!G.players[pi].bot) return;
+    G.botWait -= dt;
+    if (G.botWait <= 0) { botOpening(pi); advanceSetup(); }
+  }
+
+  // ---------- view ----------
+  const $ = id => document.getElementById(id);
+  const now = () => performance.now();
+  const canvas = $('board'), ctx = canvas.getContext('2d');
+  const off = document.createElement('canvas'); off.width = RX; off.height = RY;
+  const octx = off.getContext('2d'), img = octx.createImageData(RX, RY);
+  const rAcc = [new Float32Array(RG), new Float32Array(RG), new Float32Array(RG)];
+  const phase = new Float32Array(RG);
+  for (let p = 0; p < RG; p++) phase[p] = Math.random() * Math.PI * 2;
+  let dpr = 1, cw = 0, ch = 0, dirty = true, pointer = null, hover = null;
+  // Touch layout (bigger buttons, names on the menu, "tap" wording) follows the last pointer used,
+  // falling back to whether the device's main pointer is a finger.
+  const coarse = matchMedia('(pointer: coarse)');
+  let lastType = '';
+  const touchUI = () => lastType ? lastType !== 'mouse' : coarse.matches;
+  const tap = cap => touchUI() ? (cap ? 'Tap' : 'tap') : (cap ? 'Click' : 'click');
+
+  function resize() {
+    dpr = Math.min(2, window.devicePixelRatio || 1);
+    const r = canvas.getBoundingClientRect();
+    cw = Math.max(1, Math.round(r.width * dpr)); ch = Math.max(1, Math.round(r.height * dpr));
+    if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
+  }
+  new ResizeObserver(resize).observe(canvas);
+  const sx = x => x / W * cw, sy = y => y / H * ch;
+
+  function paintField(t) {
+    accumulate(rAcc, RX, RY, 'dR', 'qR');
+    const d = img.data, P = G.players, c0 = P[0].ch, c1 = P[1].ch, c2 = P[2].ch;
+    const tt = t * 0.006;
+    const col = [0, 0, 0];
+    for (let p = 0, o = 0; p < RG; p++, o += 4) {
+      const a0 = rAcc[0][p], a1 = rAcc[1][p], a2 = rAcc[2][p], tot = a0 + a1 + a2;
+      if (tot < 1e-4) { d[o] = 6; d[o + 1] = 6; d[o + 2] = 10; d[o + 3] = 255; continue; }
+      const v0 = a0 > 0 ? Math.pow(a0, GAMMA) : 0, v1 = a1 > 0 ? Math.pow(a1, GAMMA) : 0, v2 = a2 > 0 ? Math.pow(a2, GAMMA) : 0;
+      col[0] = 0; col[1] = 0; col[2] = 0;
+      col[c0] += v0; col[c1] += v1; col[c2] += v2;
+      const mx = Math.max(col[0], col[1], col[2]);
+      const hi = Math.max(v0, v1, v2), lo = v0 + v1 + v2 - hi - Math.min(v0, v1, v2);
+      const contest = hi > 0 ? lo / hi : 0;
+      const b = 1 - Math.exp(-tot * 5);
+      let glow = contest > 0.18 ? (contest - 0.18) / 0.82 : 0;
+      glow = glow * glow * (3 - 2 * glow) * b * (0.7 + 0.3 * Math.sin(phase[p] + tt));
+      const base = 0.5 * b;
+      for (let q = 0; q < 3; q++) {
+        const cc = col[q] / mx;
+        d[o + q] = Math.min(255, 6 + 255 * (cc * base + glow * (0.55 * cc + 0.3)));
+      }
+      d[o + 3] = 255;
+    }
+    octx.putImageData(img, 0, 0);
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(off, 0, 0, cw, ch);
+  }
+
+  function drawGrid() {
+    ctx.fillStyle = 'rgba(236,235,244,0.06)';
+    const step = sx(0.1), r = 1 * dpr;
+    for (let x = step / 2; x < cw; x += step) for (let y = step / 2; y < ch; y += step) ctx.fillRect(x - r / 2, y - r / 2, r, r);
+  }
+
+  function mixCss(share) {
+    const s = share[0] + share[1] + share[2];
+    if (s <= 0) return null;
+    let r = 0, g = 0, b = 0;
+    for (let k = 0; k < 3; k++) { const c = CH_RGB[G.players[k].ch]; r += c[0] * share[k]; g += c[1] * share[k]; b += c[2] * share[k]; }
+    return `rgb(${r | 0},${g | 0},${b | 0})`;
+  }
+
+  function drawResources(t) {
+    for (const r of G.res) {
+      const x = sx(r.x), y = sy(r.y), s = (4 + 2.2 * r.v) * dpr, fill = mixCss(r.share);
+      const pa = (t - r.pulse) / 700;
+      if (pa >= 0 && pa < 1 && fill) {
+        ctx.strokeStyle = fill; ctx.globalAlpha = 1 - pa; ctx.lineWidth = 2 * dpr;
+        ctx.beginPath(); ctx.arc(x, y, s + pa * 14 * dpr, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
+      }
+      // Resources are hollow gems so they never read as markers: dark inside, rimmed in whoever is collecting.
+      ctx.beginPath(); ctx.moveTo(x, y - s); ctx.lineTo(x + s, y); ctx.lineTo(x, y + s); ctx.lineTo(x - s, y); ctx.closePath();
+      ctx.fillStyle = 'rgba(6,6,10,0.78)'; ctx.fill();
+      ctx.lineWidth = 2 * dpr; ctx.strokeStyle = fill || '#8f8ca6'; ctx.stroke();
+      ctx.fillStyle = fill || '#ecebf4';
+      for (let k = 0; k < r.v; k++) { ctx.beginPath(); ctx.arc(x + (k - (r.v - 1) / 2) * 3.4 * dpr, y, 1.1 * dpr, 0, Math.PI * 2); ctx.fill(); }
+    }
+  }
+
+  const mRadius = m => (5.5 + 2.2 * m.str) * dpr;
+  function drawMarkers(t) {
+    for (const m of G.markers) {
+      const x = sx(m.x), y = sy(m.y), rad = mRadius(m), p = G.players[m.owner];
+      if (m === G.sel || m === hover) {
+        ctx.setLineDash([4 * dpr, 4 * dpr]); ctx.strokeStyle = 'rgba(236,235,244,0.45)'; ctx.lineWidth = 1 * dpr;
+        ctx.beginPath(); ctx.ellipse(x, y, sx(LV.reach.val[m.reach]), sy(LV.reach.val[m.reach]), 0, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+      }
+      // halo
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.beginPath(); ctx.arc(x, y, rad + 3.5 * dpr, 0, Math.PI * 2); ctx.fill();
+      // hold notches
+      for (let k = 0; k < m.hold; k++) {
+        const a = -Math.PI / 2 + (k - (m.hold - 1) / 2) * 0.55;
+        ctx.strokeStyle = '#ecebf4'; ctx.lineWidth = 2.5 * dpr;
+        ctx.beginPath(); ctx.arc(x, y, rad + 6 * dpr, a - 0.18, a + 0.18); ctx.stroke();
+      }
+      ctx.fillStyle = p.css; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5 * dpr;
+      ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      // reach dots
+      ctx.fillStyle = 'rgba(6,6,10,0.85)';
+      for (let k = 0; k < m.reach; k++) { const a = Math.PI / 2 + (k - (m.reach - 1) / 2) * 0.9; ctx.beginPath(); ctx.arc(x + Math.cos(a) * rad * 0.5, y - Math.sin(a) * rad * 0.5 + rad * 0.05, 1.3 * dpr, 0, Math.PI * 2); ctx.fill(); }
+      if (m.owner === G.you) { ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(x, y, 1.8 * dpr, 0, Math.PI * 2); ctx.fill(); }
+      // capture ring
+      if (m.control < 0.999 && m.attacker >= 0) {
+        ctx.strokeStyle = G.players[m.attacker].css; ctx.lineWidth = 3.5 * dpr;
+        ctx.beginPath(); ctx.arc(x, y, rad + 9.5 * dpr, -Math.PI / 2, -Math.PI / 2 + (1 - m.control) * Math.PI * 2); ctx.stroke();
+      }
+      // just captured: safe for a few seconds, ring shrinks as the protection runs out
+      if (G.t < m.safe) {
+        ctx.setLineDash([2 * dpr, 3 * dpr]); ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 1.5 * dpr;
+        ctx.beginPath(); ctx.arc(x, y, rad + 9.5 * dpr, -Math.PI / 2, -Math.PI / 2 + (m.safe - G.t) / SAFE * Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+      }
+      if (m === G.sel) {
+        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2 * dpr;
+        ctx.beginPath(); ctx.arc(x, y, rad + 13 * dpr + Math.sin(t * 0.006) * 1.5 * dpr, 0, Math.PI * 2); ctx.stroke();
+      } else if (m.owner === G.you && youCanAct() && G.players[G.you].bank >= nextCost(m)) {
+        // upgrade-ready badge
+        const bx = x + rad * 0.85, by = y - rad * 0.85, br = 5.5 * dpr;
+        ctx.globalAlpha = 0.75 + 0.25 * Math.sin(t * 0.006);
+        ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#0b0b11'; ctx.lineWidth = 1.8 * dpr; ctx.beginPath();
+        ctx.moveTo(bx - 2.8 * dpr, by + 1.2 * dpr); ctx.lineTo(bx, by - 1.6 * dpr); ctx.lineTo(bx + 2.8 * dpr, by + 1.2 * dpr); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+
+  function drawFx(t) {
+    G.fx = G.fx.filter(f => t - f.t0 < 900);
+    for (const f of G.fx) {
+      const a = (t - f.t0) / 900, x = sx(f.x), y = sy(f.y);
+      ctx.strokeStyle = f.css; ctx.globalAlpha = 1 - a;
+      ctx.lineWidth = (f.kind === 'flip' ? 5 : 2.5) * dpr * (1 - a * 0.6);
+      ctx.beginPath(); ctx.arc(x, y, (f.kind === 'flip' ? 10 + 70 * a : 8 + 34 * a) * dpr, 0, Math.PI * 2); ctx.stroke();
+      if (f.kind === 'flip') { ctx.fillStyle = f.css; ctx.globalAlpha = 0.35 * (1 - a); ctx.beginPath(); ctx.arc(x, y, (16 + 30 * a) * dpr, 0, Math.PI * 2); ctx.fill(); }
+      ctx.globalAlpha = 1;
+    }
+    G.floats = G.floats.filter(f => t - f.t0 < 1000);
+    ctx.font = `600 ${12 * dpr}px "DM Mono", monospace`; ctx.textAlign = 'center';
+    for (const f of G.floats) {
+      const a = (t - f.t0) / 1000;
+      ctx.globalAlpha = 1 - a * a; ctx.fillStyle = f.css;
+      ctx.fillText(f.text, sx(f.x), sy(f.y) - (14 + 20 * a) * dpr);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ---------- click-to-play cues ----------
+  const UPG = [['str', 'Strength', 'pushes harder, holds better'], ['reach', 'Reach', 'spreads further'], ['hold', 'Hold', 'harder to capture']];
+  const youCanAct = () => G.phase === 'live' && !G.paused && G.players[G.you].alive;
+  const nextCost = m => { let c = Infinity; for (const [k] of UPG) if (m[k] < 3) c = Math.min(c, LV[k].cost[m[k] + 1]); return c; };
+  const shortProblem = p => p.startsWith('Not enough') ? `Need ${markerCost(countOf(G.you))}` : p.startsWith('New markers') ? 'Your color only' : p.startsWith('Too close to the edge') ? 'Too close to the edge' : 'Too close';
+
+  // The open upgrade menu: three buttons in an arc above the selected marker (below it near the top edge).
+  // On touch screens the buttons are finger-sized (44px) and spread wider.
+  function menuButtons() {
+    const m = G.sel;
+    if (!m || m.owner !== G.you || G.phase !== 'live') return [];
+    const touch = touchUI(), r = (touch ? 22 : 15) * dpr, D = mRadius(m) + (touch ? 58 : 42) * dpr;
+    const x = sx(m.x), y = sy(m.y), need = D + r + 20 * dpr, below = y < need && ch - y > y;
+    return UPG.map(([k, name, desc], i) => {
+      const a = (below ? 1 : -1) * (Math.PI / 2 + (1 - i) * 0.9);
+      return { k, name, desc, r, x: Math.min(cw - r - 4 * dpr, Math.max(r + 4 * dpr, x + Math.cos(a) * D)), y: y + Math.sin(a) * D, below };
+    });
+  }
+  const buttonAt = (btns, px, py) => btns.find(b => Math.hypot(px - b.x, py - b.y) < b.r + 3 * dpr) || null;
+
+  // Every spot inside your color where a new marker fits, refreshed a few times a second.
+  let spots = [], spotsT = 0;
+  function drawPlaceable(t) {
+    if (!youCanAct() || G.players[G.you].bank < markerCost(countOf(G.you))) return;
+    if (t - spotsT > 200) {
+      spotsT = t; spots = [];
+      for (let y = 0.025; y < H; y += 0.05) for (let x = 0.025; x < W; x += 0.05) {
+        if (ownerOf(inflAt(x, y, false)) !== G.you) continue;
+        if (G.markers.some(m => Math.hypot(m.x - x, m.y - y) < MIN_GAP)) continue;
+        spots.push(x, y);
+      }
+    }
+    const s = 3 * dpr;
+    ctx.strokeStyle = `rgba(255,255,255,${0.4 + 0.25 * Math.sin(t * 0.005)})`; ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath();
+    for (let i = 0; i < spots.length; i += 2) {
+      const x = sx(spots[i]), y = sy(spots[i + 1]);
+      ctx.moveTo(x - s, y); ctx.lineTo(x + s, y); ctx.moveTo(x, y - s); ctx.lineTo(x, y + s);
+    }
+    ctx.stroke();
+  }
+
+  function label(text, x, y, color) {
+    ctx.font = `600 ${11 * dpr}px "Instrument Sans", sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const w = ctx.measureText(text).width + 14 * dpr, h = 20 * dpr;
+    const lx = Math.min(cw - w / 2 - 2 * dpr, Math.max(w / 2 + 2 * dpr, x));
+    ctx.fillStyle = 'rgba(11,11,17,0.9)'; ctx.strokeStyle = '#2a2937'; ctx.lineWidth = 1 * dpr;
+    ctx.beginPath(); ctx.roundRect(lx - w / 2, y - h / 2, w, h, h / 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = color; ctx.fillText(text, lx, y + 0.5 * dpr);
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  // What a click on empty ground would do, shown under the pointer.
+  function drawGhost() {
+    if (!pointer) return;
+    const setupTurn = G.phase === 'setup' && G.order[G.turn] === G.you;
+    if (!setupTurn && !youCanAct()) return;
+    if (pick(pointer) || buttonAt(menuButtons(), sx(pointer.x), sy(pointer.y))) return;
+    if (G.sel && G.phase === 'live') return;   // a click here only closes the menu
+    const prob = placeProblem(G.you, pointer.x, pointer.y);
+    const x = sx(pointer.x), y = sy(pointer.y), ok = !prob, rad = 6 * dpr, css = G.players[G.you].css;
+    if (ok) {
+      ctx.setLineDash([4 * dpr, 4 * dpr]); ctx.strokeStyle = 'rgba(236,235,244,0.5)'; ctx.lineWidth = 1 * dpr;
+      ctx.beginPath(); ctx.ellipse(x, y, sx(LV.reach.val[0]), sy(LV.reach.val[0]), 0, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+      ctx.globalAlpha = 0.85; ctx.fillStyle = css; ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+      ctx.strokeStyle = '#0b0b11'; ctx.lineWidth = 2 * dpr; ctx.beginPath();
+      ctx.moveTo(x - 3 * dpr, y); ctx.lineTo(x + 3 * dpr, y); ctx.moveTo(x, y - 3 * dpr); ctx.lineTo(x, y + 3 * dpr); ctx.stroke();
+      if (G.phase === 'live') label(`Place · ${markerCost(countOf(G.you))}`, x, y - 22 * dpr, '#ecebf4');
+    } else {
+      ctx.globalAlpha = 0.6; ctx.strokeStyle = '#8f8ca6'; ctx.lineWidth = 1.5 * dpr;
+      ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
+      label(shortProblem(prob), x, y - 22 * dpr, '#ffb547');
+    }
+  }
+
+  function glyph(k, x, y, s, color) {
+    ctx.fillStyle = color; ctx.strokeStyle = color; ctx.lineWidth = 1.8 * dpr;
+    ctx.beginPath();
+    if (k === 'str') { ctx.moveTo(x, y - s); ctx.lineTo(x + s, y + s * 0.75); ctx.lineTo(x - s, y + s * 0.75); ctx.closePath(); ctx.fill(); }
+    else if (k === 'reach') { ctx.arc(x, y, s, 0, Math.PI * 2); ctx.stroke(); ctx.beginPath(); ctx.arc(x, y, s * 0.3, 0, Math.PI * 2); ctx.fill(); }
+    else { ctx.moveTo(x, y - s); ctx.lineTo(x + s * 0.85, y - s * 0.6); ctx.lineTo(x + s * 0.75, y + s * 0.3); ctx.lineTo(x, y + s); ctx.lineTo(x - s * 0.75, y + s * 0.3); ctx.lineTo(x - s * 0.85, y - s * 0.6); ctx.closePath(); ctx.fill(); }
+  }
+
+  function drawMenu() {
+    const btns = menuButtons();
+    if (!btns.length) return;
+    const m = G.sel, you = G.players[G.you], css = you.css, touch = touchUI();
+    const hb = !touch && pointer && buttonAt(btns, sx(pointer.x), sy(pointer.y));
+    for (const b of btns) {
+      const lv = m[b.k], max = lv >= 3, cost = max ? 0 : LV[b.k].cost[lv + 1], ok = !max && you.bank >= cost;
+      ctx.fillStyle = 'rgba(6,6,10,0.85)'; ctx.beginPath(); ctx.arc(b.x, b.y, b.r + 3 * dpr, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = ok ? css : '#1c1b27'; ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill();
+      ctx.lineWidth = (b === hb ? 2.5 : 1.5) * dpr; ctx.strokeStyle = ok ? '#ffffff' : '#2a2937'; ctx.stroke();
+      if (!ok && !max) {   // how close you are to affording it
+        ctx.strokeStyle = css; ctx.lineWidth = 3 * dpr;
+        ctx.beginPath(); ctx.arc(b.x, b.y, b.r - 1.5 * dpr, -Math.PI / 2, -Math.PI / 2 + Math.min(1, you.bank / cost) * Math.PI * 2); ctx.stroke();
+      }
+      const outY = b.below ? b.y + b.r + 13 * dpr : b.y - b.r - 7 * dpr;
+      ctx.textAlign = 'center';
+      if (touch) {
+        // No hover on a phone: the price goes inside the button and the name sits outside it.
+        glyph(b.k, b.x, b.y - 6 * dpr, 5.5 * dpr, ok ? '#0b0b11' : max ? '#5a5870' : '#ecebf4');
+        ctx.font = `600 ${10 * dpr}px "DM Mono", monospace`;
+        ctx.fillStyle = ok ? '#0b0b11' : max ? '#5a5870' : '#ecebf4';
+        ctx.fillText(max ? 'MAX' : String(cost), b.x, b.y + 12 * dpr);
+        ctx.font = `600 ${10 * dpr}px "Instrument Sans", sans-serif`;
+        ctx.fillStyle = ok ? '#ecebf4' : '#8f8ca6';
+        ctx.fillText(b.name, b.x, outY);
+      } else {
+        glyph(b.k, b.x, b.y, 6 * dpr, ok ? '#0b0b11' : max ? '#5a5870' : '#ecebf4');
+        ctx.font = `500 ${10 * dpr}px "DM Mono", monospace`;
+        ctx.fillStyle = ok ? '#ecebf4' : '#8f8ca6';
+        ctx.fillText(max ? 'MAX' : String(cost), b.x, outY);
+      }
+    }
+    if (hb) {
+      const lv = m[hb.k], max = lv >= 3;
+      const ly = hb.below ? Math.max(...btns.map(b => b.y)) + hb.r + 30 * dpr : Math.min(...btns.map(b => b.y)) - hb.r - 26 * dpr;
+      label(max ? `${hb.name} is maxed` : `${hb.name} ${lv + 2}/4 · ${hb.desc}`, sx(m.x), ly, '#ecebf4');
+    }
+  }
+
+  function draw(t) {
+    paintField(t);
+    drawGrid();
+    drawPlaceable(t);
+    drawResources(t);
+    drawMarkers(t);
+    drawFx(t);
+    drawGhost();
+    drawMenu();
+  }
+
+  // ---------- panel ----------
+  const fmt = s => { s = Math.max(0, Math.ceil(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+  const lvPips = n => '<i class="f"></i>'.repeat(n + 1) + '<i></i>'.repeat(3 - n);
+  let lastPanel = 0;
+
+  function hud() {
+    const el = $('hud');
+    let html = '';
+    if (G.phase === 'menu') html = 'A new board. Pick your settings, then start the match.';
+    else if (G.phase === 'setup') {
+      const p = G.players[G.order[G.turn]];
+      html = `<b style="background:${p.css}"></b>` + (p.bot ? `${p.name} is choosing a spot…` : `Your turn. ${tap(true)} anywhere to place your first marker.`);
+    } else if (G.phase === 'live' && G.paused) html = touchUI() ? 'Paused. Tap Resume.' : 'Paused. Press Space or Resume.';
+    else if (G.phase === 'over') html = $('resultTitle').textContent;
+    if (el.innerHTML !== html) el.innerHTML = html;
+  }
+
+  function panel() {
+    $('strip').hidden = G.phase === 'menu';
+    if (!$('hint').textContent) hint(defHint());
+    if (G.phase === 'menu') return;
+    const P = G.players, you = P[G.you];
+    $('clock').textContent = fmt(G.duration - G.t);
+    $('clock').classList.toggle('low', G.phase === 'live' && G.duration - G.t <= 20);
+    $('phase').textContent = G.phase === 'setup' ? 'Placing first markers' : G.phase === 'over' ? 'Match over' : G.paused ? 'Paused' : G.t < GRACE ? `Live · captures start in ${fmt(GRACE - G.t)}` : 'Live';
+    $('pause').textContent = G.paused ? 'Resume' : 'Pause';
+    $('rows').innerHTML = [...P].sort((a, b) => b.earned - a.earned).map(pl =>
+      `<tr class="${pl.i === G.you ? 'you' : ''} ${pl.alive ? '' : 'out'}"><td><span><b style="background:${pl.css}"></b>${pl.name}</span></td><td>${Math.floor(pl.earned)}</td><td>${Math.round(pl.terr * 100)}%</td><td>${countOf(pl.i)}</td></tr>`).join('');
+    $('terrbar').innerHTML = P.map(pl => `<div style="width:${(pl.terr * 100).toFixed(1)}%;background:${pl.css}"></div>`).join('');
+    $('bank').textContent = Math.floor(you.bank);
+    $('rate').textContent = `+${you.rate.toFixed(1)} / s`;
+    const cost = markerCost(countOf(G.you));
+    const live = G.phase === 'live' && !G.paused, ready = live && you.alive && you.bank >= cost;
+    $('newCost').textContent = `${Math.min(cost, Math.floor(you.bank))} / ${cost}`;
+    $('nextFill').style.width = `${Math.min(100, you.bank / cost * 100).toFixed(1)}%`;
+    $('next').classList.toggle('ready', ready);
+    $('nextLabel').textContent = ready ? `Ready: ${tap()} a + in your color` : 'Next marker';
+    // the strip under the board on narrow screens
+    $('sClock').textContent = fmt(G.duration - G.t);
+    $('sClock').classList.toggle('low', G.phase === 'live' && G.duration - G.t <= 20);
+    $('sBank').textContent = Math.floor(you.bank);
+    $('sFill').style.width = $('nextFill').style.width;
+    $('sNext').classList.toggle('ready', ready);
+    $('sCost').textContent = ready ? `+ ready · ${cost}` : `${Math.min(cost, Math.floor(you.bank))}/${cost}`;
+    $('sPause').textContent = G.paused ? 'Resume' : 'Pause';
+    $('sPause').disabled = $('pause').disabled;
+    const m = G.sel;
+    $('selCard').hidden = !m;
+    if (m) {
+      const mine = m.owner === G.you;
+      $('selDot').style.background = P[m.owner].css;
+      $('selTitle').textContent = mine ? 'Your marker' : `${P[m.owner].name} marker`;
+      for (const [k, id, lvId] of [['str', 'upStr', 'lvStr'], ['reach', 'upReach', 'lvReach'], ['hold', 'upHold', 'lvHold']]) {
+        $(lvId).innerHTML = lvPips(m[k]);
+        const b = $(id), max = m[k] >= 3;
+        b.hidden = !mine;
+        b.textContent = max ? 'Maxed' : `Upgrade · ${LV[k].cost[m[k] + 1]}`;
+        b.disabled = !live || max || you.bank < LV[k].cost[m[k] + 1];
+      }
+    }
+    $('log').innerHTML = G.log.map(e => `<li class="${e.mine ? 'mine' : ''}"><span class="mono">${fmt(G.duration - e.t)}</span><span>${e.text}</span></li>`).join('');
+  }
+
+  function hint(text, bad) { const h = $('hint'); h.textContent = text; h.classList.toggle('bad', !!bad); }
+
+  function showResult() {
+    const P = G.players, w = P[G.winner], youWon = G.winner === G.you;
+    let title, text;
+    if (G.endReason === 'flood') { title = youWon ? 'You saturated the board.' : `${w.name} saturated the board.`; text = 'The whole board turned one color, so the match ended early.'; }
+    else if (G.endReason === 'wiped') { title = 'You were wiped out.'; text = `Your last marker was captured. ${w ? w.name + ' led on points.' : ''}`; }
+    else { title = youWon ? 'You win on points.' : `${w.name} wins on points.`; text = 'Final points earned: ' + [...P].sort((a, b) => b.earned - a.earned).map(pl => `${pl.name} ${Math.floor(pl.earned)}`).join(', ') + '.'; }
+    $('resultTitle').textContent = title; $('resultText').textContent = text;
+    $('result').hidden = false; $('shop').hidden = true; $('pause').disabled = true;
+    log(title, true);
+  }
+
+  // ---------- input ----------
+  function worldPos(e) {
+    const r = canvas.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H };
+  }
+  function pick(pt) {
+    let best = null, bd = Infinity;
+    for (const m of G.markers) {
+      const d = Math.hypot(sx(m.x) - sx(pt.x), sy(m.y) - sy(pt.y));
+      if (d < mRadius(m) + (touchUI() ? 14 : 8) * dpr && d < bd) { bd = d; best = m; }
+    }
+    return best;
+  }
+  const defHint = () => `${tap(true)} a + in your color to add a marker. ${tap(true)} one of your markers to upgrade it.`;
+  function bump(pt, text) { G.floats.push({ x: pt.x, y: pt.y + 0.02, text, css: '#ffb547', t0: now() }); }
+  function setCursor() {
+    let c = 'default';
+    if (pointer && G.phase === 'setup' && G.order[G.turn] === G.you) c = placeProblem(G.you, pointer.x, pointer.y) ? 'not-allowed' : 'copy';
+    else if (pointer && G.phase === 'live') {
+      const m = pick(pointer);
+      if (buttonAt(menuButtons(), sx(pointer.x), sy(pointer.y)) || m) c = 'pointer';
+      else if (!G.sel && youCanAct() && !placeProblem(G.you, pointer.x, pointer.y)) c = 'copy';
+    }
+    if (canvas.style.cursor !== c) canvas.style.cursor = c;
+  }
+  canvas.addEventListener('pointerdown', e => {
+    if (e.pointerType === lastType) return;
+    const wasDefault = $('hint').textContent === defHint();
+    lastType = e.pointerType; dirty = true;
+    if (wasDefault) hint(defHint());   // switch "click" and "tap" wording with the device
+  });
+  canvas.addEventListener('pointermove', e => { pointer = worldPos(e); hover = G.phase !== 'menu' ? pick(pointer) : null; setCursor(); });
+  canvas.addEventListener('pointerleave', () => { pointer = null; hover = null; });
+  // A finger leaves no pointer behind, so drop the preview when it lifts.
+  const lift = e => { if (e.pointerType !== 'mouse') { pointer = null; hover = null; } };
+  canvas.addEventListener('pointerup', lift);
+  canvas.addEventListener('pointercancel', lift);
+  canvas.addEventListener('click', e => {
+    const pt = worldPos(e);
+    if (G.phase === 'setup') {
+      if (G.players[G.order[G.turn]].bot) return;
+      const prob = placeProblem(G.you, pt.x, pt.y);
+      if (prob) { bump(pt, shortProblem(prob)); return; }
+      place(G.you, pt.x, pt.y); advanceSetup(); return;
+    }
+    if (G.phase !== 'live' && G.phase !== 'over') return;
+    // 1. a button of the open upgrade menu
+    const b = buttonAt(menuButtons(), sx(pt.x), sy(pt.y));
+    if (b) { doUpgrade(b.k); return; }
+    // 2. a marker: open or close its menu
+    const m = pick(pt);
+    if (m) {
+      G.sel = G.sel === m ? null : m;
+      if (!G.sel) hint(defHint());
+      else if (m.owner === G.you) hint(`${tap(true)} a button next to the marker to upgrade it. ${tap(true)} the marker again to close.`);
+      else hint('An opponent marker. Push your color onto it to capture it.');
+      dirty = true; setCursor(); return;
+    }
+    // 3. empty ground: the first click only closes an open menu
+    if (G.sel) { G.sel = null; hint(defHint()); dirty = true; setCursor(); return; }
+    if (!youCanAct()) return;
+    const prob = placeProblem(G.you, pt.x, pt.y);
+    if (prob) { bump(pt, shortProblem(prob)); hint(prob, true); return; }
+    const cost = markerCost(countOf(G.you));
+    place(G.you, pt.x, pt.y);
+    G.floats.push({ x: pt.x, y: pt.y, text: `−${cost}`, css: G.players[G.you].css, t0: now() });
+    spotsT = 0; dirty = true; setCursor();
+    hint(`Marker placed. ${tap(true)} it to upgrade it.`);
+  });
+
+  function doUpgrade(kind) {
+    if (G.phase !== 'live' || G.paused || !G.sel || G.sel.owner !== G.you) return;
+    if (!upgrade(G.sel, kind)) {
+      const lv = G.sel[kind];
+      hint(lv >= 3 ? 'That one is maxed.' : `Not enough points yet. You need ${LV[kind].cost[lv + 1]}.`, true);
+      bump({ x: G.sel.x, y: G.sel.y }, lv >= 3 ? 'Maxed' : `Need ${LV[kind].cost[lv + 1]}`);
+    }
+    else {
+      hint({ str: 'Strength up. It pushes harder and holds better.', reach: 'Reach up. Its color spreads further.', hold: 'Hold up. It is harder to capture.' }[kind]);
+      const [, name] = UPG.find(u => u[0] === kind);
+      G.floats.push({ x: G.sel.x, y: G.sel.y, text: `${name} ${G.sel[kind] + 1}/4`, css: '#ecebf4', t0: now() });
+    }
+    dirty = true;
+  }
+  function togglePause() {
+    if (G.phase !== 'live') return;
+    G.paused = !G.paused;
+  }
+  for (const id of ['upStr', 'upReach', 'upHold']) $(id).addEventListener('click', e => doUpgrade(e.currentTarget.dataset.k));
+  $('pause').addEventListener('click', togglePause);
+  $('sPause').addEventListener('click', togglePause);
+  document.addEventListener('keydown', e => {
+    if (e.target.closest && e.target.closest('input')) return;
+    if (e.key === '1') doUpgrade('str');
+    else if (e.key === '2') doUpgrade('reach');
+    else if (e.key === '3') doUpgrade('hold');
+    else if (e.key === 'Escape') { G.sel = null; hint(defHint()); }
+    else if (e.key === ' ' && G.phase === 'live') { e.preventDefault(); togglePause(); }
+  });
+
+  // settings controls
+  function bindSeg(id, key, parse) {
+    const el = $(id);
+    const sync = () => el.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(parse(b.dataset.v) === settings[key])));
+    el.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; settings[key] = parse(b.dataset.v); saveSettings(); sync(); onSettings(); });
+    sync();
+  }
+  function onSettings() {
+    document.documentElement.style.setProperty('--you', CH_CSS[settings.color]);
+    $('botNote').textContent = {
+      easy: 'Slow and careless. They earn about half as much and don’t hunt your markers.',
+      normal: 'Steady. They earn a bit less than you and would rather fight each other.',
+      hard: 'Quick and sharp. They earn as much as you and come for your markers.',
+    }[settings.bot] || '';
+    if (G && G.phase === 'menu') { const res = G.res; newGame({ res }); }
+  }
+  bindSeg('optColor', 'color', Number);
+  bindSeg('optBot', 'bot', String);
+  bindSeg('optLen', 'len', Number);
+  $('optInside').checked = settings.inside;
+  $('optInside').addEventListener('change', e => { settings.inside = e.target.checked; saveSettings(); });
+  $('start').addEventListener('click', startMatch);
+  $('reroll').addEventListener('click', () => { newGame({ res: makeBoard() }); });
+  $('again').addEventListener('click', () => { newGame({ res: makeBoard() }); startMatch(); });
+  $('settings').addEventListener('click', () => {
+    newGame({ res: makeBoard() });
+    $('matchBox').style.display = 'none'; $('setupBox').style.display = 'grid';
+  });
+
+  // ---------- loop ----------
+  let last = 0;
+  function frame() {
+    requestAnimationFrame(frame);
+    // Effects are stamped with now() from input handlers, so the frame clock uses now() too.
+    // Capped so a background tab pauses the match instead of jumping ahead when it comes back.
+    const t = now(), dt = Math.min(0.25, (t - (last || t)) / 1000); last = t;
+    if (G.phase === 'setup') setupTick(dt);
+    else if (G.phase === 'live' && !G.paused) { let left = dt; while (left > 1e-6) { const h = Math.min(left, 1 / 30); step(h); left -= h; if (G.phase !== 'live') break; } }
+    if (cw > 1) draw(t);
+    if (t - lastPanel > 100 || dirty) { lastPanel = t; dirty = false; panel(); hud(); setCursor(); }
+  }
+
+  function boot(data) {
+    if (data && data.settings) Object.assign(settings, data.settings);
+    newGame();
+    onSettings();
+    resize();
+    requestAnimationFrame(frame);
+  }
+  window.claude?.hot?.snapshot?.(() => ({ settings }));
+  window.claude?.hot?.ready ? window.claude.hot.ready(boot) : boot(window.claude?.hot?.data ?? {});
+})();
+</script>
